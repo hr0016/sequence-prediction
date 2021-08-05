@@ -8,6 +8,8 @@ import datetime
 from IPython.display import clear_output
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d
+from sklearn.preprocessing import RobustScaler, StandardScaler, MinMaxScaler
 
 
 def eng2ger(val):
@@ -50,6 +52,66 @@ def eng2ger(val):
         # Find the index of the input string in the English names list
         val_idx = np.where(english == val)[0][0]
         return str(german[val_idx])
+
+
+def load_from_csv_TEMPERATURE_FIX(fpath, converter, fields=None, translate=None):
+    '''
+    Handle the problem of the temperature column header changing between files.
+    Load the data without specifying which columns to load, then find the temperature
+    data and change its name to a generic "temp", so it can be referenced for all files.
+            
+    We still pass the fields we want (minus temperature) as the "fields" argument,
+    but this is no longer used within the pd.read_csv() method.
+    
+    '''
+
+    # Load from file, without specifying which columns to use
+    df = pd.read_csv(fpath, skiprows=[1], header=0, infer_datetime_format=True)
+    
+    # Get the column name for temperature
+    temperature_col_name = [c for c in df.columns if "temp" in c.lower()]
+    
+    # Append this temperature to the list of field names, in the function scope
+    func_fields = fields.copy()
+    func_fields.append(temperature_col_name[0])
+    
+    # Take a subset of the DataFrame containing only the specified fields
+    df = df[func_fields]
+    
+    # Rename the temperature column to a generic name
+    df = df.rename(columns={temperature_col_name[0]: "temp"})
+        
+    # Initialise variable name so there's something to return irrespective of translation bool state
+    translation_error_log = None
+    
+    # Go through translation routine if required. Check for failed translations.
+    if translate != None:
+        # Translate German columns where a translation exists in the dictionary, else leave the German.
+        translated_cols = [translate[ger_col] if ger_col in translate.keys() else ger_col for ger_col in df.columns]
+    
+        # Store any column names that haven't been translated
+        failed_translations = np.where([col not in translate.values() for col in translated_cols])[0]
+    
+        # This condition fails if len(failed_translations)==0
+        if np.any(failed_translations):
+            # Add the file path, as well as all failed translations and their column index
+            translation_error_log = [fpath, [(idx, df.columns[idx]) for idx in failed_translations]]
+    
+        # Replace the column names with the translated names
+        df.columns = translated_cols
+    
+    
+    # Get rid of state=="STO" and step==9999, since these are useless
+    df = df[df.state != "STO"]
+    df = df[df.step != 9999]
+    
+    
+    # Get rid of null rows, if present
+    df.dropna(inplace=True)
+    # Reset the indices in case of null row deletion
+    df.reset_index(inplace=True, drop=True)
+
+    return df, translation_error_log
 
 
 def load_from_csv_EDIT(fpath, converter, fields=None, translate=None): 
@@ -496,6 +558,8 @@ def apply_array_length_threshold(cell_dict, threshold_val, verbose=False):
     # Turn it into a numpy array with the correct dimensions
     cap_arr = np.array(cap_arr)
     cap_arr = cap_arr.squeeze()
+    
+    print(cap_arr.shape)
 
     # Assign the thresholded capacity array to a new dict key
     c_dict['capacity_thresh'] = cap_arr
@@ -541,7 +605,7 @@ def pad_time_series_data(parent_dict, mask_val=np.nan, verbose=False):
             k = list(new_dict[cell]['ts_data_thresh'][cycle].keys())[0]
 
             # Find the length of the array for that cycle
-            arr_len = new_dict[cell]['ts_data'][cycle][k].shape[0]
+            arr_len = new_dict[cell]['ts_data_thresh'][cycle][k].shape[0]
             if arr_len > max_len:
                 max_len = arr_len   
 
@@ -576,7 +640,81 @@ def pad_time_series_data(parent_dict, mask_val=np.nan, verbose=False):
     return new_dict
 
 
-def construct_3d_x_array(input_dict, variables=['V', 't_elapsed']):
+def pad_time_series_data_EDIT(parent_dict, key, mask_val=np.nan, verbose=False):
+    '''
+    Description.
+
+
+    Parameters
+    ----------
+
+    parent_dict (type: dict)
+        Description.
+        
+    key (type: str)
+        The dictionary key that specifies one level above the "cycle" level.
+        This makes it more flexible, slightly lowering the dependence on the 
+        specification of the input dictionary
+
+    mask_val (type: float)
+        Value to use when extending arrays. Defaults to np.nan so it doesn't affect scaling/normalisation.
+
+
+    '''
+    if mask_val == None:
+        mask_val = np.nan
+
+    # Make a copy of the dictionary passed to the function to avoid manipulating the original data
+    new_dict = copy.deepcopy(parent_dict)
+
+    # Initialise a variable for storing the maximum array length
+    max_len = 0
+
+    # Iterative method to find max time series array length
+    for cell in new_dict:
+        for cycle in new_dict[cell][key]:
+            # Get the value of the first time series data key e.g. 'V' for voltage.
+            # Assumes all variable arrays are the same length
+            k = list(new_dict[cell][key][cycle].keys())[0]
+
+            # Find the length of the array for that cycle
+            arr_len = new_dict[cell][key][cycle][k].shape[0]
+            if arr_len > max_len:
+                max_len = arr_len   
+
+    if verbose: print(max_len)
+
+    # Create a new sub-dictionary to store the padded result
+    for cell in new_dict.keys():
+        new_dict[cell]['ts_padded'] = {cycle:
+                                         {var: None for var in new_dict[cell][key][cycle].keys()}
+                                     for cycle in new_dict[cell][key].keys()}
+
+
+    # Loop through the time series arrays and extend them with np.nan, to have length of max_len
+    # For each cycle
+    for cell in tqdm(list(new_dict.keys())):
+        for cycle in new_dict[cell][key].keys():
+            # For each variable e.g. voltage, time
+            for var in new_dict[cell][key][cycle]:
+                # Store the data in a variable for readability
+                arr = new_dict[cell][key][cycle][var]
+                # Find the current length of the array
+                current_len = arr.shape[0]
+                # Specify how many padded values to add
+                num_pad_vals_to_add = max_len - current_len
+
+                # Generate the padded array
+                padded_arr = np.append(arr, np.repeat(mask_val, num_pad_vals_to_add))
+                # Assign it to the relevant location in padded_cell_dict
+                new_dict[cell]['ts_padded'][cycle][var] = padded_arr
+
+
+    return new_dict
+
+
+
+def construct_3d_x_array(input_dict, variables=['V', 't_elapsed'], key='ts_padded'):
     '''
     
     The resulting array has the shape [num_features, num_cycles, num_samples],
@@ -602,7 +740,7 @@ def construct_3d_x_array(input_dict, variables=['V', 't_elapsed']):
         Description
         
     
-    cell_cycele_indices (type: numpy array)
+    cell_cycle_indices (type: numpy array)
         Description
     
     
@@ -615,19 +753,19 @@ def construct_3d_x_array(input_dict, variables=['V', 't_elapsed']):
     cells = list(input_dict.keys())
     
     # Initialise the 3D array using the padded time series data from the first cell
-    X_arr = np.array([[input_dict[cells[0]]['ts_padded'][cycle][var] for cycle in input_dict[cells[0]]['ts_padded'].keys()] for var in variables])
+    X_arr = np.array([[input_dict[cells[0]][key][cycle][var] for cycle in input_dict[cells[0]][key].keys()] for var in variables])
     
     # Initialise a 1D array that will tell us which cell the cycle came from
     #cell_cycle_indices = np.array([str(cells[0]) for i in range(X_arr.shape[1])])
-    cell_cycle_indices = np.array([str(cells[0])+"_"+str(k) for k in input_dict[cells[0]]['ts_padded'].keys()])
+    cell_cycle_indices = np.array([str(cells[0])+"_"+str(k) for k in input_dict[cells[0]][key].keys()])
     
     # Build up the complete arrays by creating the arrays per cell, then appending them to the master arrays
     for cell in cells[1:]:
-        temp_arr = np.array([[input_dict[cell]['ts_padded'][cycle][var] for cycle in input_dict[cell]['ts_padded'].keys()] for var in variables])
+        temp_arr = np.array([[input_dict[cell][key][cycle][var] for cycle in input_dict[cell][key].keys()] for var in variables])
         X_arr = np.append(X_arr, temp_arr, axis=1)
 
         #temp_indices_arr = np.array([str(cell) for i in range(temp_arr.shape[1])])
-        temp_indices_arr = np.array([str(cell)+"_"+str(k)  for k in input_dict[cell]['ts_padded'].keys()])
+        temp_indices_arr = np.array([str(cell)+"_"+str(k)  for k in input_dict[cell][key].keys()])
         cell_cycle_indices = np.append(cell_cycle_indices, temp_indices_arr)
         
         
@@ -743,11 +881,17 @@ def get_train_val_test(cell_list, X, y, index, split_frac_1=0.7, split_frac_2=0.
     y_val = y[val_bool, ...]
     y_test = y[test_bool, ...]
     
-    return (X_train, y_train), (X_val, y_val), (X_test, y_test)
+    # Create a dictionary that tells us which cells were used for train/val/test
+    cells_dict = {'train': train_cells, 'val': val_cells, 'test': test_cells}
+    
+    
+    return (X_train, y_train), (X_val, y_val), (X_test, y_test), cells_dict
 
 
 def min_max_scaling(X_train, X_val, X_test):
     '''
+    OBSOLETE FUNCTION. REPLACED BY scaler_3d().
+    
     Given data for train, val and test, compute the minimum and maximum values (per-feature)
     in the training set and scale the train, val and test sets using min max scaling with the
     min and max values obtained from the training set.    
@@ -804,6 +948,53 @@ def min_max_scaling(X_train, X_val, X_test):
     return X_train_sc, X_val_sc, X_test_sc
 
 
+def scaler_3d(X_train, X_val, X_test, scaler_type='robust', return_scaler=False):
+    
+    # Set return_scaler = True if we want to return the scaler
+    
+    # Instantiate the selected scaler type
+    if scaler_type.lower() == "robust":
+        sc = RobustScaler()
+    elif scaler_type.lower() == "standard":
+        sc = StandardScaler()
+    elif scaler_type.lower() == "minmax":
+        sc = MinMaxScaler()
+    else:
+        print("Invalid scaler_type argument")
+        return None, None, None
+    
+    
+    # Assign meaning to the shape of the input X array, for readability
+    num_instances, num_steps, num_features = X_train.shape
+    
+    # Fit the scaler using the training data and transform the training data
+    temp = X_train.reshape(-1, num_features)
+    temp_sc = sc.fit_transform(temp)
+    X_train_sc = temp_sc.reshape(-1, num_steps, num_features)
+
+    # Use the scaler (fit on the training data), to transform the validation data
+    temp = X_val.reshape(-1, num_features)
+    temp_sc = sc.transform(temp)
+    X_val_sc = temp_sc.reshape(-1, num_steps, num_features)
+
+    # Use the scaler (fit on the training data), to transform the testing data
+    temp = X_test.reshape(-1, num_features)
+    temp_sc = sc.transform(temp)
+    X_test_sc = temp_sc.reshape(-1, num_steps, num_features)
+    
+    
+    # Convert nan values to zeros, if present
+    X_train_sc = np.nan_to_num(X_train_sc, nan=0)
+    X_val_sc = np.nan_to_num(X_val_sc, nan=0)
+    X_test_sc = np.nan_to_num(X_test_sc, nan=0)
+    
+    
+    if return_scaler:
+        return X_train_sc, X_val_sc, X_test_sc, sc
+    else:
+        return X_train_sc, X_val_sc, X_test_sc
+
+
 def create_y_target_array(parent_dict, cell_ID, df):
     '''
     For a particular cell_ID in parent_dict, generate an array with 5 columns.
@@ -853,10 +1044,75 @@ def create_y_target_array(parent_dict, cell_ID, df):
     return result_arr
 
 
+def interpolate_data(data_dict, variables=['V', 'I', 'T', 'Q'], time_freq=4):
+    
+    # Initialise dict
+    interpld_data = dict()
+
+    for cell in tqdm(list(data_dict.keys())):
+
+        # Initialise cell dict
+        interpld_data[cell] = dict()
+        interpld_data[cell]['interp'] = dict()
+
+        for cycle in data_dict[cell]['ts_data_thresh']:
+
+            # Initialise cycle dict
+            interpld_data[cell]['interp'][cycle] = dict()
+
+            time = data_dict[cell]['ts_data_thresh'][cycle]['t_elapsed']
+            current = data_dict[cell]['ts_data_thresh'][cycle]['I']
+            voltage = data_dict[cell]['ts_data_thresh'][cycle]['V']
+            temperature = data_dict[cell]['ts_data_thresh'][cycle]['T']
+            charge = data_dict[cell]['ts_data_thresh'][cycle]['QCharge']
+
+            regular_time = np.arange(0, np.max(time), time_freq)
+
+            if 'I' in variables:
+                f_i = interp1d(time, current)
+                interpld_data[cell]['interp'][cycle]['I'] = f_i(regular_time)  
+            if 'V' in variables:
+                f_v = interp1d(time, voltage)
+                interpld_data[cell]['interp'][cycle]['V'] = f_v(regular_time)
+            if 'T' in variables:
+                f_T = interp1d(time, temperature)
+                interpld_data[cell]['interp'][cycle]['T'] = f_T(regular_time)
+            if 'Q' in variables:
+                f_Q = interp1d(time, charge)
+                interpld_data[cell]['interp'][cycle]['QCharge'] = f_Q(regular_time)                
+    
+    return interpld_data
 
 
+# A function to reshape the data for CNN
+def reshape_for_cnn(X_arr, to_plot=False):
+    '''
+    
+    
+    
+    
+    
+    
+    '''
+    # Get the shape of the data prior to reshaping for LSTM
+    features, samples, timesteps = X_arr.shape
+    
+    # Initialise an empty array to hold the reshaped X array
+    X_reshaped = np.zeros(shape=(samples, timesteps, features), dtype=float)
+    
+    for i in range(X_reshaped.shape[0]):
+        X_reshaped[i] = np.vstack([X_arr[0, i, :], X_arr[1, i, :], X_arr[2, i, :]]).T
+        
+    if to_plot:
+        # Plot a random selection of instances to check they look OK
+        indices = np.random.randint(0, samples, size=25)
+        fig, ax = plt.subplots(5,5)
+        for subplot, sample in enumerate(indices):
+            ax.flatten()[subplot].plot(X_reshaped[sample,:,0], X_reshaped[sample,:,2], 'o')
 
-
+        plt.show()
+        
+    return X_reshaped
 
 
 
