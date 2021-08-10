@@ -17,7 +17,7 @@ If you are only interested in the first 100 cycles, this is the baumhofer_first_
 - Do the pre-processing to get train, validation and test sets, with the data split <b>at the cell level</b>
 
 <b>'03. Rough_model_experimentation.ipynb'</b>
-- Initial evaluation of 1D CNN model using the Baumhofer data. This does not yet implement any hyperparameter tuning or k-fold cross validation.
+- Initial evaluation of 1D CNN model using the Baumhofer data. This does not yet implement any hyperparameter tuning or k-fold cross validation (with splits at the cell level).
 
 ## Module Outline
 
