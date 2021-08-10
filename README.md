@@ -8,7 +8,6 @@ Working with the data from Baumhofer 2014, to reproduce the results in their pap
 If you are only interested in the first 100 cycles, this is the baumhofer_first_100_cycles.pkl file located 
 [HERE](https://www.dropbox.com/sh/jdbib6xx2p31vyr/AAAxvFHDNhnp6mtLuXm4WWUja?dl=0)<br>
 
-Notebook summary:
 - Process the time series data (V, I, time_elapsed, T) from the raw CSV files, for <b>all cycles</b>.<br>
 - Clean the data - remove cycles with erroneous values
 
