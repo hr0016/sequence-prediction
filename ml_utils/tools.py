@@ -8,6 +8,7 @@ To use this in another place, you can say
 '''
 
 import numpy as np
+from sklearn.model_selection import KFold
 
 
 def lr_scheduler(epoch, lr):
@@ -21,6 +22,48 @@ def lr_scheduler(epoch, lr):
     if epoch % decay_step == 0 and epoch:
         return lr * pow(decay_rate, np.floor(epoch / decay_step))
     return lr
+
+
+def kfold_gen(cells, index, n_folds, rdm_state=None):
+    '''
+    The "train" and "test" sets here are referred to within the context of 
+    k-fold cross validation.
+    
+    
+    '''
+    
+    if rdm_state == None:
+        shuffle = False
+    else:
+        shuffle = True
+    
+    # The KFold sklearn instance is a generator that yields train/test indices
+    kf = KFold(n_splits=n_folds, shuffle=shuffle, random_state=rdm_state)
+
+    # Identify cell IDs from "cells" array
+    for kf_train_cell_indices, kf_test_cell_indices in kf.split(cells):
+        
+        kf_train_cells = cells[kf_train_cell_indices]
+        kf_test_cells = cells[kf_test_cell_indices]
+        
+        # Debugging print statements
+        #print(f"Train cells: {kf_train_cells}")
+        #print(f"Test cells: {kf_test_cells}")
+
+        # Get bool arrays that state for each row in "index", whether or not
+        # that row contains a train cell (or a test cell)
+        kf_train_bool = np.in1d(index, kf_train_cells)
+        kf_test_bool = np.in1d(index, kf_test_cells)
+        
+        # Find the indices of True occurrences in the bool arrays.
+        # These are the indices of the array "X" of train and test cell instances
+        kf_train_indices = np.where(kf_train_bool)[0]
+        kf_test_indices = np.where(kf_test_bool)[0]
+
+        yield kf_train_indices, kf_test_indices
+
+
+
 
 """
 ensure the input is in the shape of (number of in_cycle points, original features) and scaled 
@@ -94,3 +137,44 @@ def cov_data_construct(original_data, w_size):
         ws3d.append(ws4d.reshape((int(ws*w_size), w_size, ws4d.shape[-1])))
     ws3d = np.stack(ws3d, axis=0)
     return ws3d
+
+"""
+split the trajectory date into any number of cycles (but <= 100) as input and output.
+only suitable for a maximum of 100 cycles.
+specify the total number of cells, input cycles and trajectory of the variable.
+"""
+
+def split_cycles(num_cells, input_num_cycles, full_capa_traj):
+    pad_x, pad_y = int(input_num_cycles/5+1), 40
+    cell_traj, cell_traj_beyond = [], []
+    if input_num_cycles % 5 != 0:
+        raise ValueError('input_num_cycles must be multiple of 5')
+    for i in range(num_cells):
+        for c in range(2, pad_x):
+            x = [0]*(pad_x-c) + list(full_capa_traj[i][:c])
+            y = list(full_capa_traj[i][c::10]) + [0]*(pad_y-len(full_capa_traj[i][c::10]))
+            cell_traj.append(x)
+            cell_traj_beyond.append(y)
+            X_data = np.array(cell_traj)
+            y_data = np.array(cell_traj_beyond)
+            X_data = X_data.reshape(len(cell_traj), 1, pad_x)  
+            y_data = y_data.reshape(len(cell_traj_beyond), 1, pad_y)            
+    return X_data, y_data
+
+
+
+"""
+a function computes the MAPE when there are zeros in the vectors
+"""
+
+def new_mape(Y_actual,Y_Predicted):
+    Y_actual = Y_actual.flatten()
+    Y_Predicted = Y_Predicted.flatten()
+    mask = np.ones(len(Y_actual), dtype=bool)
+    zero_ind = np.where(Y_actual == 0)
+    mask[zero_ind]=False
+    Y_actual = Y_actual[mask]
+    Y_Predicted = Y_Predicted[mask]
+    mape = np.mean(np.abs((Y_actual - Y_Predicted)/Y_actual))*100
+    return mape
+
