@@ -1044,6 +1044,55 @@ def create_y_target_array(parent_dict, cell_ID, df):
     return result_arr
 
 
+def create_y_IR_target_array(parent_dict, cell_ID, df, lo_idx, hi_idx):
+    '''
+    For a particular cell_ID in parent_dict, generate an array with 5 columns.
+    
+    These columns represent:
+    - Number of cycles remaining until knee onset
+    - Number of cycles remaining until knee point
+    - Number of cycles remaining until EOL
+    - Capacity degradation (Ah) until knee onset
+    - Capacity degradation (Ah) until knee point
+    
+    
+    Parameters
+    ----------
+    parent_dict (type: dict)
+        Dictionary whose keys are cell IDs, containing 2D cycle/capacity array in a key called 'capacity_thresh'
+        
+    cell_ID (type: str)
+        Cell identifier string used to specify the keys of parent_dict to extract cell data.
+        
+    df (type: pd.DataFrame)
+        A DataFrame containing, for each cell, 5 values (cycle number for onset, point, EOL, capacity at onset and point).
+        This is obtained using the function "get_knee_and_eol_results"    
+    
+    
+    '''
+    
+    
+    # Extract the 2D array of cycles/interpolated capacity values from the dictionary
+    arr = copy.deepcopy(parent_dict[cell_ID]['IR'])
+
+    # Create a DataFrame so we can explicitly refer to the column names for assignment
+    result = pd.DataFrame(np.zeros(shape=(hi_idx-lo_idx, 5), dtype=float),
+                          index=arr[lo_idx:hi_idx, 0].astype(int),
+                          columns=['tto', 'ttp', 'tte', 'deg_o', 'deg_p'])
+
+    # Populate the result DataFrame with values
+    result['tto'] = df.at[cell_ID, "onset"] - arr[lo_idx:hi_idx, 0]
+    result['ttp'] = df.at[cell_ID, "point"] - arr[lo_idx:hi_idx, 0]
+    #result['tte'] = df.at[cell_ID, "EOL"] - arr[lo_idx:hi_idx, 0]
+    result['deg_o'] = df.at[cell_ID, "onset_y"] - arr[lo_idx:hi_idx, 1]
+    result['deg_p'] = df.at[cell_ID, "point_y"] - arr[lo_idx:hi_idx, 1]
+
+    # Convert the DataFrame to a numpy array
+    result_arr = result.to_numpy(copy=True)
+    
+    return result_arr
+
+
 def interpolate_data(data_dict, variables=['V', 'I', 'T', 'Q'], time_freq=4):
     
     # Initialise dict
