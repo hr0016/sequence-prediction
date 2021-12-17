@@ -157,8 +157,8 @@ def split_cycles(num_cells, input_num_cycles, full_capa_traj):
             cell_traj_beyond.append(y)
             X_data = np.array(cell_traj)
             y_data = np.array(cell_traj_beyond)
-            X_data = X_data.reshape(len(cell_traj), 1, pad_x)  
-            y_data = y_data.reshape(len(cell_traj_beyond), 1, pad_y)            
+            X_data = X_data.reshape(len(cell_traj), pad_x, 1)  
+            y_data = y_data.reshape(len(cell_traj_beyond), pad_y, 1)            
     return X_data, y_data
 
 

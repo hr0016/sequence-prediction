@@ -11,7 +11,8 @@ From there you can create instances of models as
 
 from tensorflow.keras.models import Model
 from tensorflow.keras import layers
-from tensorflow.keras.layers import Input, Dense, Flatten, Dropout, Conv1D, SeparableConv1D, MaxPooling1D, LSTM
+from tensorflow.keras.layers import Input, Dense, Flatten, Dropout, Conv1D, SeparableConv1D, MaxPooling1D
+from tensorflow.keras.layers import LSTM, RepeatVector, TimeDistributed
 
 
 
@@ -58,26 +59,28 @@ def build_convnet_model(X_in, loss='mae', n_outputs=1):
 
 def S2S(in_seq_size, out_seq_size, hidden_units):
     
-    in_shape = Input(shape=(None, in_seq_size))
+    in_shape = Input(shape=(in_seq_size, 1))
     
-    enc1, enc_state_h1, enc_state_c1 = LSTM(units=hidden_units, return_state=True, return_sequences=True)(in_shape)
+    enc1 = LSTM(units=hidden_units, return_state=False, return_sequences=True)(in_shape)
     
-    enc2, enc_state_h2, enc_state_c2 = LSTM(units=hidden_units, return_state=True, return_sequences=True)(enc1, initial_state=[enc_state_h1, enc_state_c1])
+    enc2 = LSTM(units=hidden_units, return_state=False, return_sequences=True)(enc1)
     
-    enc3, enc_state_h3, enc_state_c3 = LSTM(units=hidden_units, return_state=True, return_sequences=True)(enc2, initial_state=[enc_state_h2, enc_state_c2])
+    enc3 = LSTM(units=hidden_units, return_state=False, return_sequences=True)(enc2)
     
-    enc4, enc_state_h4, enc_state_c4 = LSTM(units=hidden_units, return_state=True, return_sequences=True)(enc3, initial_state=[enc_state_h3, enc_state_c3])
+    enc4 = LSTM(units=hidden_units, return_state=False, return_sequences=False)(enc3)
     
-    dec1, dec_state_h1, dec_state_c1 = LSTM(units=hidden_units, return_state=True, return_sequences=True)(enc4, initial_state=[enc_state_h4, enc_state_c4])
+    embvec = RepeatVector(out_seq_size)(enc4)
     
-    dec2, dec_state_h2, dec_state_c2 = LSTM(units=hidden_units, return_state=True, return_sequences=True)(dec1, initial_state=[dec_state_h1, dec_state_c1])
+    dec1 = LSTM(units=hidden_units, return_state=False, return_sequences=True)(embvec)
     
-    dec3, dec_state_h3, dec_state_c3 = LSTM(units=hidden_units, return_state=True, return_sequences=True)(dec2, initial_state=[dec_state_h2, dec_state_c2])
+    dec2 = LSTM(units=hidden_units, return_state=False, return_sequences=True)(dec1)
     
-    dec4, dec_state_h4, dec_state_c4 = LSTM(units=hidden_units, return_state=True)(dec3, initial_state=[dec_state_h3, dec_state_c3])
+    dec3 = LSTM(units=hidden_units, return_state=False, return_sequences=True)(dec2)
     
-    dense1 = Dense(units=hidden_units)(dec4)
+    dec4 = LSTM(units=hidden_units, return_state=False, return_sequences=True)(dec3)
     
-    output = Dense(units=out_seq_size)(dense1)
+    dense1 = Dense(units=out_seq_size)(dec4)
+    
+    output = TimeDistributed(Dense(units=1))(dense1)
     
     return Model(inputs=in_shape, outputs=output)
